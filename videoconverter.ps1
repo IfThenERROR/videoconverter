@@ -16,31 +16,26 @@ param (
 
 [int]$crf = 20,
 
-[bool]$deint = $false,
+[switch]$deint,
 
-[bool]$copyaudio = $false,
+[switch]$copyaudio,
 
-[bool]$copysubtitles = $false,
+[switch]$copysubtitles,
 
-[bool]$hardsubtitles = $false,
+[switch]$hardsubtitles,
 
 [String]$outfile,
 
-[bool]$onthefly = $false
+[switch]$nocopy,
+
+[switch]$keepfile,
+
+[string]$aspectratio
 
 )
 
-if ( $onthefly -eq $false ) {
-
-	# Verzeichnis für lokale Kopie
-	[string]$tempFolder = "C:\konv\"
-
-} else {
-
-	# Arbeitsverzeichnis ist Speicherort der Quelldatei
-	[string]$tempFolder = [System.IO.Path]::GetDirectoryName($file) + "\"
-
-}
+# Verzeichnis für lokale Kopie
+[string]$tempFolder = "C:\konv\"
 
 [int]$fehler = 0
 
@@ -262,8 +257,28 @@ if ($subtitleTrack -ne $null) {
 
 }
 
+# Prüfen, ob aspect ratio vorgegeben ist
+if ( !($aspectratio -eq "" ) {
+
+	[string]$arCommand = "-aspect"
+
+} else {
+
+	[string]$arCommand = ""
+
+}
+
 # Dateiname bestimmen
-[string]$tempFile = $tempFolder + ([System.IO.Path]::GetFileName($file))
+if ( $nocopy -eq $false ) {
+
+	[string]$tempFile = $tempFolder + ([System.IO.Path]::GetFileName($file))
+
+} else {
+
+	# Arbeitsverzeichnis ist Speicherort der Quelldatei
+	[string]$tempFile = $file
+
+}
 
 if ( $outfile -eq "" ) {
 
@@ -280,13 +295,13 @@ else{
 # Konvertieren
 if ( $fehler -eq 0 ) {
 
-	if ( $onthefly -eq $false ) {
+	if ( $nocopy -eq $false ) {
 		if (!(Test-Path $tempfile)) { Copy-Item "$file" -Destination "$tempfile" }
 	}
-	& c:\"portable apps\ffmpeg\bin\ffmpeg.exe" "-hide_banner", "-hwaccel", "dxva2", "$starttimeCommand", "$starttimeFormatted", "$endtimeCommand", "$endtimeFormatted", "-n", "-i", "$tempfile", "$filterCommand", "$filter", "-map", "$videoMapping", "-c:v:0", "libx265", "-preset:v:0", "slow", "-crf", "$crf", "-map", "$audiomapping", "-c:a", "$audiocommand", "$channelsCommand", "$channels", "$bitrateCommand", "$bitrate", "$subtitleMappingCommand", "$subtitleMapping", "$subtitleCodecCommand", "$subtitleCodec", "-f", "matroska", "-r", "25", "$outfile"
-	Remove-Item "$tempfile"
+	& c:\"portable apps\ffmpeg\bin\ffmpeg.exe" "-hide_banner", "-hwaccel", "dxva2", "$starttimeCommand", "$starttimeFormatted", "$endtimeCommand", "$endtimeFormatted", "-n", "-i", "$tempfile", "$arCommand", "$aspectratio", "$filterCommand", "$filter", "-map", "$videoMapping", "-c:v:0", "libx265", "-preset:v:0", "slow", "-crf", "$crf", "-map", "$audiomapping", "-c:a", "$audiocommand", "$channelsCommand", "$channels", "$bitrateCommand", "$bitrate", "$subtitleMappingCommand", "$subtitleMapping", "$subtitleCodecCommand", "$subtitleCodec", "-f", "matroska", "-r", "25", "$outfile"
+	if ( !$keepfile ) { Remove-Item "$tempfile" }
 
 }
 
 
-Write-Host c:\"portable apps\ffmpeg\bin\ffmpeg.exe" "-hide_banner", "-hwaccel", "dxva2", "$starttimeCommand", "$starttimeFormatted", "$endtimeCommand", "$endtimeFormatted", "-n", "-i", "$tempfile", "$filterCommand", "$filter", "-map", "$videoMapping", "-c:v:0", "libx265", "-preset:v:0", "slow", "-crf", "$crf", "-map", "$audiomapping", "-c:a", "$audiocommand", "$channelsCommand", "$channels", "$bitrateCommand", "$bitrate", "$subtitleMappingCommand", "$subtitleMapping", "$subtitleCodecCommand", "$subtitleCodec", "-f", "matroska", "-r", "25", "$outfile"
+Write-Host c:\"portable apps\ffmpeg\bin\ffmpeg.exe" "-hide_banner", "-hwaccel", "dxva2", "$starttimeCommand", "$starttimeFormatted", "$endtimeCommand", "$endtimeFormatted", "-n", "-i", "$tempfile", "$arCommand", "$aspectratio", "$filterCommand", "$filter", "-map", "$videoMapping", "-c:v:0", "libx265", "-preset:v:0", "slow", "-crf", "$crf", "-map", "$audiomapping", "-c:a", "$audiocommand", "$channelsCommand", "$channels", "$bitrateCommand", "$bitrate", "$subtitleMappingCommand", "$subtitleMapping", "$subtitleCodecCommand", "$subtitleCodec", "-f", "matroska", "-r", "25", "$outfile"
