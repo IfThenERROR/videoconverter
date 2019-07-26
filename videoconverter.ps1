@@ -295,6 +295,9 @@ else{
 # Konvertieren
 if ( $fehler -eq 0 ) {
 
+Write-Host c:\"portable apps\ffmpeg\bin\ffmpeg.exe" "-hide_banner", "-hwaccel", "dxva2", "$starttimeCommand", "$starttimeFormatted", "$endtimeCommand", "$endtimeFormatted", "-n", "-i", "$tempfile", "$arCommand", "$aspectratio", "$filterCommand", "$filter", "-map", "$videoMapping", "-c:v:0", "libx265", "-preset:v:0", "slow", "-crf", "$crf", "-map", "$audiomapping", "-c:a", "$audiocommand", "$channelsCommand", "$channels", "$bitrateCommand", "$bitrate", "$subtitleMappingCommand", "$subtitleMapping", "$subtitleCodecCommand", "$subtitleCodec", "-f", "matroska", "-r", "25", "$outfile"
+Write-Host ""
+
 	if ( $nocopy -eq $false ) {
 		if (!(Test-Path $tempfile)) { Copy-Item "$file" -Destination "$tempfile" }
 	}
