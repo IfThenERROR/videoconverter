@@ -271,7 +271,7 @@ if ( !($aspectratio -eq "" ) {
 }
 
 # Prüfen, ob chapters gelöscht werden sollen
-if ( !($deletechapters -eq $true )) {
+if ( $deletechapters -eq $true ) {
 
 	[string]$chapCommand = "-map_chapters"
 	[string]$chapMapping = "-1"
