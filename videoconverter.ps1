@@ -36,8 +36,11 @@ param (
 
 )
 
-# Verzeichnis für lokale Kopie
-[string]$tempFolder = "C:\konv\"
+# Directory to download local copy of source file to
+[string]$tempFolder = "W:\"
+
+# Directory to store final file into
+[string]$targetFolder = "X:\recorder\konv\"
 
 [int]$fehler = 0
 
@@ -310,13 +313,30 @@ else{
 # Konvertieren
 if ( $fehler -eq 0 ) {
 
+#Show the ffmpeg command that will be applied
 Write-Host c:\"portable apps\ffmpeg\bin\ffmpeg.exe" "-hide_banner", "-hwaccel", "dxva2", "$starttimeCommand", "$starttimeFormatted", "$endtimeCommand", "$endtimeFormatted", "-n", "-i", "$tempfile", "$arCommand", "$aspectratio", "$filterCommand", "$filter", "-map", "$videoMapping", "-c:v:0", "libx265", "-preset:v:0", "slow", "-crf", "$crf", "-map", "$audiomapping", "-c:a", "$audiocommand", "$channelsCommand", "$channels", "$bitrateCommand", "$bitrate", "$subtitleMappingCommand", "$subtitleMapping", "$subtitleCodecCommand", "$subtitleCodec", "$chapCommand", "$chapMapping", "-f", "matroska", "-r", "25", "$outfile"
 Write-Host ""
 
+	#Copy the source file into the temporary folder if not disabled
 	if ( $nocopy -eq $false ) {
 		if (!(Test-Path $tempfile)) { Copy-Item "$file" -Destination "$tempfile" }
 	}
+
+	#Launch ffmpeg
 	& c:\"portable apps\ffmpeg\bin\ffmpeg.exe" "-hide_banner", "-hwaccel", "dxva2", "$starttimeCommand", "$starttimeFormatted", "$endtimeCommand", "$endtimeFormatted", "-n", "-i", "$tempfile", "$arCommand", "$aspectratio", "$filterCommand", "$filter", "-map", "$videoMapping", "-c:v:0", "libx265", "-preset:v:0", "slow", "-crf", "$crf", "-map", "$audiomapping", "-c:a", "$audiocommand", "$channelsCommand", "$channels", "$bitrateCommand", "$bitrate", "$subtitleMappingCommand", "$subtitleMapping", "$subtitleCodecCommand", "$subtitleCodec", "$chapCommand", "$chapMapping", "-f", "matroska", "-r", "25", "$outfile"
+
+	# Move converted file to final directory and remove local copy
+	if (!(Test-Path $outfile)) {
+		Copy-Item "$outfile" -Destination "$targetFolder")
+		Remove-Item "$outfile"
+	}
+	else {
+		Write-Host "ERROR!"
+		Write-Host "Converted file not found!"
+		Write-Host
+	}
+
+	# Delete source file if not disabled
 	if ( !$keepfile ) { Remove-Item "$tempfile" }
 
 }
