@@ -327,7 +327,7 @@ Write-Host ""
 
 	# Move converted file to final directory and remove local copy
 	if (!(Test-Path $outfile)) {
-		Copy-Item "$outfile" -Destination "$targetFolder")
+		Copy-Item "$outfile" -Destination "$targetFolder"
 		Remove-Item "$outfile"
 	}
 	else {
