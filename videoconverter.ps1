@@ -12,7 +12,11 @@ param (
 
 [int]$startframe,
 
+[string]$starttime,
+
 [int]$endframe,
+
+[string]$endtime,
 
 [int]$crf = 20,
 
@@ -32,6 +36,8 @@ param (
 
 [switch]$deletechapters,
 
+[switch]$finalize,
+
 [string]$aspectratio
 
 )
@@ -41,6 +47,20 @@ param (
 
 # Directory to store final file into
 [string]$targetFolder = "X:\recorder\konv\"
+
+# Path to merger script
+[string]$merger = '"C:\Portable Apps\merger.ps1"'
+
+# Path to leading black video file for finalizing
+[string]$finalizePre = '"C:\konv\black halbe sekunde.mkv"'
+
+#Request system availabiliry, no sleep idle timeout while executing
+$code=@' 
+[DllImport("kernel32.dll", CharSet = CharSet.Auto,SetLastError = true)]
+public static extern void SetThreadExecutionState(uint esFlags);
+'@
+$ste = Add-Type -memberDefinition $code -name System -namespace Win32 -passThru
+$ste::SetThreadExecutionState([uint32]"0x80000000" -bor [uint32]"0x00000001")
 
 [int]$fehler = 0
 
@@ -52,6 +72,11 @@ if ($startframe -gt 0) {
 	[string]$starttimeCommand = "-ss"
 	[double]$starttime = $startframe / $fps
 	[string]$starttimeFormatted = "{0:HH:mm:ss.fff}" -f ([datetime]([timespan]::fromseconds($starttime)).Ticks)
+
+} elseif ($starttime -ne $null) {
+
+	[string]$starttimeCommand = "-ss"
+	[string]$starttimeFormatted = $starttime
 
 } else {
 
@@ -66,6 +91,11 @@ if ($endframe -gt 0) {
 	[string]$endtimeCommand = "-to"
 	[double]$endtime = $endframe / $fps
 	[string]$endtimeFormatted = "{0:HH:mm:ss.fff}" -f ([datetime]([timespan]::fromseconds($endtime)).Ticks)
+
+} elseif ($endtime -ne $null) {
+
+	[string]$endtimeCommand = "-to"
+	[string]$endtimeFormatted = $endtime
 
 } else {
 
@@ -237,7 +267,7 @@ $subtitleTrack = $streams | Where-Object -FilterScript { $_.codec_type -eq "subt
 
 if ($subtitleTrack -ne $null) {
 
-	#Prüfer ob Untertitel eingebrannt werden sollen
+	#Prüfen ob Untertitel eingebrannt werden sollen
 	if ( $hardsubtitles -eq $true ) {
 
 		$filterCommand = "-filter_complex"
@@ -327,16 +357,52 @@ Write-Host ""
 
 	# Move converted file to final directory and remove local copy
 	if (Test-Path $outfile) {
+
+		if ( $finalize ) {
+
+			#Create command for finalizing
+			[string]$fileList = "$finalizePre"
+			if ( (Get-ChildItem "$outfile".*.$extension | Measure-Object).Count > 0) {
+
+				$fileList = "$fileList" + ",`""
+
+				for ( $i = 0; $i -lt (Get-ChildItem "$outfile".*.$extension | Measure-Object).Count; $i++ ) {
+				$fileList = "$fileList" + ",`"" + (Get-ChildItem "$outfile".*.$extension[$i].name + "`""
+
+				}
+
+			}
+
+			$fileList = "$fileList" + ",`"" + "$outfile" + "`""
+
+			[string]$finalizeCommand = "$merger" + " -parts " + "$fileList" + " -outfile `"" + ([System.IO.Path]::GetFileNameWithoutExtension($file)) + ".final`""
+			Write-Host "$finalizeCommand"
+			Invoke-Expression "& $finalizeCommand"
+			Write-Host "Finalized file $outfile moved to $targetFolder"
+			Remove-Item "$outfile"
+
+		} else {
+
 		Copy-Item "$outfile" -Destination "$targetFolder"
+		Write-Host "Converted file $outfile moved to $targetFolder"
 		Remove-Item "$outfile"
-	}
-	else {
+
+		}
+
+		Write-Host "Temporary file successfully removed."
+
+	} else {
+
 		Write-Host "ERROR!"
 		Write-Host "Converted file not found!"
 		Write-Host
+
 	}
 
 	# Delete source file if not disabled
 	if ( !$keepfile ) { Remove-Item "$tempfile"; Remove-Item "$file" }
 
 }
+
+#Return to default sleep timeout
+$ste::SetThreadExecutionState([uint32]"0x80000000")
