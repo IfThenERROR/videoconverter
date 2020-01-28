@@ -332,9 +332,7 @@ if ( $outfile -eq "" ) {
 
 	$outfile = $tempFolder + ([System.IO.Path]::GetFileNameWithoutExtension($file)) + ".konv.mkv"
 
-}
-
-else{
+} else {
 
 	$outfile = $tempFolder + $outfile + ".konv.mkv"
 
@@ -358,16 +356,38 @@ Write-Host ""
 	# Move converted file to final directory and remove local copy
 	if (Test-Path $outfile) {
 
+		#Run finalizer and merge parts
 		if ( $finalize ) {
 
 			#Create command for finalizing
 			[string]$fileList = "$finalizePre"
-			if ( (Get-ChildItem "$outfile".*.$extension | Measure-Object).Count > 0) {
 
-				$fileList = "$fileList" + ",`""
+			#if merging parts, cut the counter and save only the title here
+			[string]$baseName = ""
 
-				for ( $i = 0; $i -lt (Get-ChildItem "$outfile".*.$extension | Measure-Object).Count; $i++ ) {
-				$fileList = "$fileList" + ",`"" + (Get-ChildItem "$outfile".*.$extension[$i].name + "`""
+			#Check if outfile ends with a digit and contains more than one field seperated by a "."
+			if (( ("$outfile").split(".")[("$outfile").split(".").count - 3] -match ".*\d$" ) -and ( ("$outfile").split(".").count -gt 1 )) {
+
+				#if true, store everything except the last field as basename
+				for ( $i = 0; $i -lt ("$outfile").split(".")[("$outfile").split(".").count - 3]; $i++ ) {
+
+					$baseName = $baseName + ("$outfile").split(".")[$i]
+
+				}
+
+			} else {
+
+					$baseName = $outfile
+
+			}
+			
+			$baseName = $baseName.substring(3)
+
+			if ( (Get-ChildItem "$targetFolder$baseName.*.konv.$extension" | Measure-Object).Count -gt 0) {
+
+				for ( $i = 0; $i -lt (Get-ChildItem "$targetFolder$baseName.*.konv.$extension" | Sort-Object | Measure-Object).Count; $i++ ) {
+
+				$fileList = "$fileList" + ",`"$targetFolder" + (Get-ChildItem "$targetFolder$baseName.*.konv.$extension" | Sort-Object)[$i].name + "`""
 
 				}
 
@@ -375,7 +395,7 @@ Write-Host ""
 
 			$fileList = "$fileList" + ",`"" + "$outfile" + "`""
 
-			[string]$finalizeCommand = "$merger" + " -parts " + "$fileList" + " -outfile `"" + ([System.IO.Path]::GetFileNameWithoutExtension($file)) + ".final`""
+			[string]$finalizeCommand = "$merger" + " -parts " + "$fileList" + " -outfile `"$targetFolder$baseName.final.$extension`""
 			Write-Host "$finalizeCommand"
 			Invoke-Expression "& $finalizeCommand"
 			Write-Host "Finalized file $outfile moved to $targetFolder"
