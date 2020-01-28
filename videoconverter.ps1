@@ -395,7 +395,7 @@ Write-Host ""
 
 			$fileList = "$fileList" + ",`"" + "$outfile" + "`""
 
-			[string]$finalizeCommand = "$merger" + " -parts " + "$fileList" + " -outfile `"$targetFolder$baseName.final.$extension`""
+			[string]$finalizeCommand = "$merger" + " -parts " + "$fileList" + " -outfile `"$baseName.final`""
 			Write-Host "$finalizeCommand"
 			Invoke-Expression "& $finalizeCommand"
 			Write-Host "Finalized file $outfile moved to $targetFolder"
