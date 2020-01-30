@@ -293,7 +293,7 @@ if ($subtitleTrack -ne $null) {
 }
 
 # Prüfen, ob aspect ratio vorgegeben ist
-if ( !($aspectratio -eq $null ) {
+if ( !($aspectratio -eq "" ) {
 
 	[string]$arCommand = "-aspect"
 
@@ -328,7 +328,7 @@ if ( $nocopy -eq $false ) {
 
 }
 
-if ( $outfile -eq $null ) {
+if ( $outfile -eq "" ) {
 
 	$outfile = $tempFolder + ([System.IO.Path]::GetFileNameWithoutExtension($file)) + ".konv.mkv"
 
