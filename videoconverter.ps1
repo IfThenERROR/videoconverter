@@ -293,7 +293,7 @@ if ($subtitleTrack -ne $null) {
 }
 
 # Prüfen, ob aspect ratio vorgegeben ist
-if ( !($aspectratio -eq "" ) {
+if ( !($aspectratio -eq $null ) {
 
 	[string]$arCommand = "-aspect"
 
@@ -328,7 +328,7 @@ if ( $nocopy -eq $false ) {
 
 }
 
-if ( $outfile -eq "" ) {
+if ( $outfile -eq $null ) {
 
 	$outfile = $tempFolder + ([System.IO.Path]::GetFileNameWithoutExtension($file)) + ".konv.mkv"
 
@@ -369,7 +369,7 @@ Write-Host ""
 			if (( ("$outfile").split(".")[("$outfile").split(".").count - 3] -match ".*\d$" ) -and ( ("$outfile").split(".").count -gt 1 )) {
 
 				#if true, store everything except the last field as basename
-				for ( $i = 0; $i -lt ("$outfile").split(".")[("$outfile").split(".").count - 3]; $i++ ) {
+				for ( $i = 0; $i -lt ("$outfile").split(".").count - 3; $i++ ) {
 
 					$baseName = $baseName + ("$outfile").split(".")[$i]
 
