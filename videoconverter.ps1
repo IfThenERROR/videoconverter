@@ -1,3 +1,7 @@
+## Videoconverter
+## v 2.0
+## Powershell script
+
 # Parameter übergeben
 
 param (
@@ -10,50 +14,88 @@ param (
 
 [int]$fps = 25,
 
-[int]$startframe,
-
-[string]$starttime,
-
-[int]$endframe,
-
-[string]$endtime,
-
 [int]$crf = 20,
 
 [switch]$deint,
 
 [switch]$copyaudio,
 
-[switch]$copysubtitles,
+[switch]$hightempcompression,
 
-[switch]$hardsubtitles,
+[string]$audiocodec = "ac3",
 
 [String]$outfile,
 
 [switch]$nocopy,
 
-[switch]$keepfile,
+[switch]$removefile,
+
+[switch]$removetemp,
 
 [switch]$deletechapters,
 
-[switch]$finalize,
+[switch]$finalize = $false,
 
 [string]$aspectratio
 
+[int[]]$parts
+
 )
 
+### General definitions ###
 # Directory to download local copy of source file to
 [string]$tempFolder = "W:\"
 
 # Directory to store final file into
 [string]$targetFolder = "X:\recorder\konv\"
 
-# Path to merger script
-[string]$merger = '"C:\Portable Apps\merger.ps1"'
+# Path to ffprobe
+[string]$ffprobe = "C:\portable apps\ffmpeg\bin\ffprobe.exe"
+
+# Path to ffmpeg
+[string]$ffmpeg = "C:\`"portable apps\ffmpeg\bin\ffmpeg.exe`""
 
 # Path to leading black video file for finalizing
-[string]$finalizePre = '"C:\konv\black halbe sekunde.mkv"'
+[string]$finalizePreStereo = "C:\konv\black sekunde stereo.mkv"
+[string]$finalizePre51 = "C:\konv\black sekunde 5.1.mkv"
+[string]$finalizePre43 = "C:\konv\black sekunde stereo 43.mkv"
 
+
+### Variables ###
+[int]$fehler = 0
+[string]$tempFile = ""
+[string]$audioTempFiles = ""
+[string]$extension = ""
+[string]$videoMapping = ""
+[string]$quellenCommand = ""
+[int]$segmente = 0
+[string[]]$startzeiten
+[string[]]$endzeiten
+[string]$quellen
+[string]$filterCommand = ""
+[string]$filter = ""
+[string]$filters = ""
+[string]$concatFilter = ""
+[string]$concatStreams = ""
+[int]$concatAnzahl = 0
+[string]$channelsCommand = ""
+[string]$bitrateCommand = ""
+[string]$chapCommand = ""
+[string]$chapMapping = ""
+[string]$parameters
+
+
+### Functions ###
+function get-FormatedTime-from-Frame([int]$frame, [int]$FramesPerSec){
+
+	([double]$timeCalculated = $frame / $FramesPerSec) | Out-Null
+	([string]$timeFormatted = "{0:HH:mm:ss.fff}" -f ([datetime]([timespan]::fromseconds($timeCalculated)).Ticks)) | Out-Null
+	return $timeFormatted
+
+}
+
+
+### Main script ###
 #Request system availabiliry, no sleep idle timeout while executing
 $code=@' 
 [DllImport("kernel32.dll", CharSet = CharSet.Auto,SetLastError = true)]
@@ -62,107 +104,71 @@ public static extern void SetThreadExecutionState(uint esFlags);
 $ste = Add-Type -memberDefinition $code -name System -namespace Win32 -passThru
 $ste::SetThreadExecutionState([uint32]"0x80000000" -bor [uint32]"0x00000001")
 
-[int]$fehler = 0
 
-[string]$videoMapping = "0:v:0"
+# Wenn finalize, dann auch die temporäre Datei entfernen
+if ($finalize -eq $true) {
 
-# Startzeit aus Startframe berechnen
-if ($startframe -gt 0) {
-
-	[string]$starttimeCommand = "-ss"
-	[double]$starttime = $startframe / $fps
-	[string]$starttimeFormatted = "{0:HH:mm:ss.fff}" -f ([datetime]([timespan]::fromseconds($starttime)).Ticks)
-
-} elseif ($starttime -ne $null) {
-
-	[string]$starttimeCommand = "-ss"
-	[string]$starttimeFormatted = $starttime
-
-} else {
-
-	[string]$starttimeCommand = ""
-	[string]$starttimeFormatted = ""
+	$removetemp = $true
 
 }
 
-# Endzeit aus Endframe berechnen
-if ($endframe -gt 0) {
+# Dateiname bestimmen
+if ( $nocopy -eq $false ) {
 
-	[string]$endtimeCommand = "-to"
-	[double]$endtime = $endframe / $fps
-	[string]$endtimeFormatted = "{0:HH:mm:ss.fff}" -f ([datetime]([timespan]::fromseconds($endtime)).Ticks)
-
-} elseif ($endtime -ne $null) {
-
-	[string]$endtimeCommand = "-to"
-	[string]$endtimeFormatted = $endtime
+	$tempFile = $tempFolder + ([System.IO.Path]::GetFileName($file))
 
 } else {
 
-	[string]$endtimeCommand = ""
-	[string]$endtimeFormatted = ""
+	# Arbeitsverzeichnis ist Speicherort der Quelldatei
+	$tempFile = $file
 
 }
 
-# Filter setzen
-[string]$filterCommand = "-filter:v"
+# Videofilter setzen
+$filterCommand = "-vf"
 if ($deint -eq $true) {
 
-	[string]$filter = "bwdif,fps=25"
+	$filter = "bwdif,fps=25"
 
 } else {
 
-	[string]$filter = "fps=25"
+	$filter = "fps=25"
 
 }
 
-# Audiospur finden
-$rawstreams = c:\"portable apps\ffmpeg\bin\ffprobe.exe" -hide_banner -show_entries stream="index,codec_type,codec_name,channels,bit_rate:stream_tags=language" -print_format json -i $file | ConvertFrom-Json
-$streams = @()
+# Check if the source file exists, then start converting
+if ( Test-Path $file) {
 
-for ($i = 0; $i -lt $rawstreams.streams.Length; $i++) {
+	# Prüfen, ob mehrere Abschnitte übergeben wurden (neue Methode)
+	if ($parts.length -gt 0) {
 
-	$line = New-Object -TypeName PSObject
-	$line | Add-Member -MemberType Noteproperty -Name 'index' -Value $rawstreams.streams[$i].index
-	$line | Add-Member -MemberType Noteproperty -Name 'codec_type' -Value $rawstreams.streams[$i].codec_type
-	$line | Add-Member -MemberType Noteproperty -Name 'codec_name' -Value $rawstreams.streams[$i].codec_name
-	$line | Add-Member -MemberType Noteproperty -Name 'channels' -Value $rawstreams.streams[$i].channels
-	$line | Add-Member -MemberType Noteproperty -Name 'bit_rate' -Value $rawstreams.streams[$i].bit_rate
-	$line | Add-Member -MemberType Noteproperty -Name 'language' -Value $rawstreams.streams[$i].tags.language
-	$streams += $line
+		if ($parts.length % 2 -ne 0) {
 
-}
-
-# dts behalten
-$audiotrack = $streams | Where-Object -FilterScript { $_.codec_type -eq "audio" -and $_.codec_name -eq "dts" }
-
-if ($audiotrack -ne $null) {
-
-	$copyaudio = $true
-
-} else {
-
-	# aac behalten
-	$audiotrack = $streams | Where-Object -FilterScript { $_.codec_type -eq "audio" -and $_.codec_name -eq "aac" }
-
-	if ($audiotrack -ne $null) {
-
-		$copyaudio = $true
-
-	} else {
-
-		# 5.1 + deu
-		$audiotrack = $streams | Where-Object -FilterScript { $_.codec_type -eq "audio" -and $_.channels -eq "6" -and $_.language -like "deu" }
-
-		if ($audiotrack -ne $null) {
-
-			$bitrate = [int]($streams[$audiotrack[0].index].bit_rate)
-			$channels = 6
-
+			Write-Host "ERROR!" -ForegroundColor White -BackgroundColor DarkRed
+			Write-Host "Bei Abschnitten fehlt eine Start- oder Endzeit." -ForegroundColor White -BackgroundColor DarkRed
+			$fehler = 1
+	
 		} else {
 
-			# 5.1 + ger
-			$audiotrack = $streams | Where-Object -FilterScript { $_.codec_type -eq "audio" -and $_.channels -eq "6" -and $_.language -like "ger" }
+			# Audiospur finden
+			$rawstreams = (& "$ffprobe" '-hide_banner' '-loglevel' 'fatal' '-show_entries' 'stream="index,codec_type,codec_name,channels,bit_rate:stream_tags=language"' '-print_format' 'json' '-i' "$file" | ConvertFrom-Json)
+			$streams = @()
+
+			for ($i = 0; $i -lt $rawstreams.streams.Length; $i++) {
+
+				$line = New-Object -TypeName PSObject
+				$line | Add-Member -MemberType Noteproperty -Name 'index' -Value $rawstreams.streams[$i].index
+				$line | Add-Member -MemberType Noteproperty -Name 'codec_type' -Value $rawstreams.streams[$i].codec_type
+				$line | Add-Member -MemberType Noteproperty -Name 'codec_name' -Value $rawstreams.streams[$i].codec_name
+				$line | Add-Member -MemberType Noteproperty -Name 'channels' -Value $rawstreams.streams[$i].channels
+				$line | Add-Member -MemberType Noteproperty -Name 'bit_rate' -Value $rawstreams.streams[$i].bit_rate
+				$line | Add-Member -MemberType Noteproperty -Name 'language' -Value $rawstreams.streams[$i].tags.language
+				$streams += $line
+
+			}
+
+			# 5.1 + deu
+			$audiotrack = $streams | Where-Object -FilterScript { $_.codec_type -eq "audio" -and $_.channels -eq "6" -and $_.language -like "deu" }
 
 			if ($audiotrack -ne $null) {
 
@@ -171,18 +177,18 @@ if ($audiotrack -ne $null) {
 
 			} else {
 
-				# ac3 + deu
-				$audiotrack = $streams | Where-Object -FilterScript { $_.codec_type -eq "audio" -and $_.codec_name -eq "ac3" -and $_.language -like "deu" }
+				# 5.1 + ger
+				$audiotrack = $streams | Where-Object -FilterScript { $_.codec_type -eq "audio" -and $_.channels -eq "6" -and $_.language -like "ger" }
 
 				if ($audiotrack -ne $null) {
 
 					$bitrate = [int]($streams[$audiotrack[0].index].bit_rate)
-					$channels = 2
+					$channels = 6
 
 				} else {
 
-					# ac3 + ger
-					$audiotrack = $streams | Where-Object -FilterScript { $_.codec_type -eq "audio" -and $_.codec_name -eq "ac3" -and $_.language -like "ger" }
+					# ac3 + deu
+					$audiotrack = $streams | Where-Object -FilterScript { $_.codec_type -eq "audio" -and $_.codec_name -eq "ac3" -and $_.language -like "deu" }
 
 					if ($audiotrack -ne $null) {
 
@@ -191,8 +197,8 @@ if ($audiotrack -ne $null) {
 
 					} else {
 
-						# deu
-						$audiotrack = $streams | Where-Object -FilterScript { $_.codec_type -eq "audio" -and $_.language -like "deu" }
+						# ac3 + ger
+						$audiotrack = $streams | Where-Object -FilterScript { $_.codec_type -eq "audio" -and $_.codec_name -eq "ac3" -and $_.language -like "ger" }
 
 						if ($audiotrack -ne $null) {
 
@@ -201,8 +207,8 @@ if ($audiotrack -ne $null) {
 
 						} else {
 
-							# ger
-							$audiotrack = $streams | Where-Object -FilterScript { $_.codec_type -eq "audio" -and $_.language -like "ger" }
+							# deu
+							$audiotrack = $streams | Where-Object -FilterScript { $_.codec_type -eq "audio" -and $_.language -like "deu" }
 
 							if ($audiotrack -ne $null) {
 
@@ -211,7 +217,21 @@ if ($audiotrack -ne $null) {
 
 							} else {
 
-								$fehler = 1
+								# ger
+								$audiotrack = $streams | Where-Object -FilterScript { $_.codec_type -eq "audio" -and $_.language -like "ger" }
+
+								if ($audiotrack -ne $null) {
+
+									$bitrate = [int]($streams[$audiotrack[0].index].bit_rate)
+									$channels = 2
+
+								} else {
+
+									Write-Host "ERROR!" -ForegroundColor White -BackgroundColor DarkRed
+									Write-Host "Keine passende Audiospur gefunden" -ForegroundColor White -BackgroundColor DarkRed
+									$fehler = 1
+
+								}
 
 							}
 
@@ -223,204 +243,252 @@ if ($audiotrack -ne $null) {
 
 			}
 
-		}
+			# Parameter für Audiocodec setzen
+			# Default ist ac3
+			if (( $audiocodec -eq "" ) -or ( $audiocodec -eq "ac3" )) {
 
-	}
+				$audiocodec = "ac3"
+				$channelsCommand = "-ac"
+				$bitrateCommand = "-b:a"
 
-}
+				#Bitrate begrenzen auf 256k für Stereo und 448k für 5.1
+				if (( $bitrate -ge 448000 ) -and ( [int]($streams[$audiotrack[0].index].channels) -eq 6)) {
 
-if ( $copyaudio -eq $true ) {
+					$bitrate = 448000
 
-	$audioMapping = "0:a"
-	$audioCommand = "copy"
-	$channelsCommand = ""
-	$channels = ""
-	$bitrateCommand = ""
-	$bitrate = ""
+				} elseif (( $bitrate -ge 256000 ) -and ( [int]($streams[$audiotrack[0].index].channels) -eq 2)) {
 
-} else {
-
-	$audiomapping = "0:" + $($audiotrack[0].index)
-	$audiocommand = "ac3"
-	$channelsCommand = "-ac"
-	$bitrateCommand = "-b:a"
-
-
-	if ( $bitrate -ge 384000 ) {
-
-		if ( [int]($streams[$audiotrack[0].index].channels) -eq 6) {
-
-			$bitrate = 384000
-
-		} else {
-
-			$bitrate = 256000
-
-		}
-
-	}
-
-}
-
-# Prüfen, ob Untertitel kopiert werden sollen
-$subtitleTrack = $streams | Where-Object -FilterScript { $_.codec_type -eq "subtitle" }
-
-if ($subtitleTrack -ne $null) {
-
-	#Prüfen ob Untertitel eingebrannt werden sollen
-	if ( $hardsubtitles -eq $true ) {
-
-		$filterCommand = "-filter_complex"
-		$filter = "[0:v:0]$filter[v]; [v][0:s:0]overlay[out]"
-		$videoMapping = "[out]"
-
-	} elseif ( $copysubtitles -eq $true ) {
-
-		[string]$subtitleMappingCommand = "-map"
-		[string]$subtitleMapping = "0:s"
-		[string]$subtitleCodecCommand = "-c:s"
-		[string]$subtitleCodec = "copy"
-
-	} else {
-
-		[string]$subtitleMappingCommand = ""
-		[string]$subtitleMapping = ""
-		[string]$subtitleCodecCommand = ""
-		[string]$subtitleCodec = ""
-
-	}
-
-}
-
-# Prüfen, ob aspect ratio vorgegeben ist
-if ( !($aspectratio -eq "" ) {
-
-	[string]$arCommand = "-aspect"
-
-} else {
-
-	[string]$arCommand = ""
-
-}
-
-# Prüfen, ob chapters gelöscht werden sollen
-if ( $deletechapters -eq $true ) {
-
-	[string]$chapCommand = "-map_chapters"
-	[string]$chapMapping = "-1"
-
-} else {
-
-	[string]$chapCommand = ""
-	[string]$chapMapping = ""
-
-}
-
-# Dateiname bestimmen
-if ( $nocopy -eq $false ) {
-
-	[string]$tempFile = $tempFolder + ([System.IO.Path]::GetFileName($file))
-
-} else {
-
-	# Arbeitsverzeichnis ist Speicherort der Quelldatei
-	[string]$tempFile = $file
-
-}
-
-if ( $outfile -eq "" ) {
-
-	$outfile = $tempFolder + ([System.IO.Path]::GetFileNameWithoutExtension($file)) + ".konv.mkv"
-
-} else {
-
-	$outfile = $tempFolder + $outfile + ".konv.mkv"
-
-}
-
-# Convert
-if ( $fehler -eq 0 ) {
-
-# Show the ffmpeg command that will be applied
-Write-Host c:\"portable apps\ffmpeg\bin\ffmpeg.exe" "-hide_banner", "-hwaccel", "dxva2", "$starttimeCommand", "$starttimeFormatted", "$endtimeCommand", "$endtimeFormatted", "-n", "-i", "$tempfile", "$arCommand", "$aspectratio", "$filterCommand", "$filter", "-map", "$videoMapping", "-c:v:0", "libx265", "-preset:v:0", "slow", "-crf", "$crf", "-map", "$audiomapping", "-c:a", "$audiocommand", "$channelsCommand", "$channels", "$bitrateCommand", "$bitrate", "$subtitleMappingCommand", "$subtitleMapping", "$subtitleCodecCommand", "$subtitleCodec", "$chapCommand", "$chapMapping", "-f", "matroska", "-r", "25", "$outfile"
-Write-Host ""
-
-	# Copy the source file into the temporary folder if not disabled
-	if ( $nocopy -eq $false ) {
-		if (!(Test-Path $tempfile)) { Copy-Item "$file" -Destination "$tempfile" }
-	}
-
-	# Launch ffmpeg
-	& c:\"portable apps\ffmpeg\bin\ffmpeg.exe" "-hide_banner", "-hwaccel", "dxva2", "$starttimeCommand", "$starttimeFormatted", "$endtimeCommand", "$endtimeFormatted", "-n", "-i", "$tempfile", "$arCommand", "$aspectratio", "$filterCommand", "$filter", "-map", "$videoMapping", "-c:v:0", "libx265", "-preset:v:0", "slow", "-crf", "$crf", "-map", "$audiomapping", "-c:a", "$audiocommand", "$channelsCommand", "$channels", "$bitrateCommand", "$bitrate", "$subtitleMappingCommand", "$subtitleMapping", "$subtitleCodecCommand", "$subtitleCodec", "$chapCommand", "$chapMapping", "-f", "matroska", "-r", "25", "$outfile"
-
-	# Move converted file to final directory and remove local copy
-	if (Test-Path $outfile) {
-
-		#Run finalizer and merge parts
-		if ( $finalize ) {
-
-			#Create command for finalizing
-			[string]$fileList = "$finalizePre"
-
-			#if merging parts, cut the counter and save only the title here
-			[string]$baseName = ""
-
-			#Check if outfile ends with a digit and contains more than one field seperated by a "."
-			if (( ("$outfile").split(".")[("$outfile").split(".").count - 3] -match ".*\d$" ) -and ( ("$outfile").split(".").count -gt 1 )) {
-
-				#if true, store everything except the last field as basename
-				for ( $i = 0; $i -lt ("$outfile").split(".").count - 3; $i++ ) {
-
-					$baseName = $baseName + ("$outfile").split(".")[$i]
+					$bitrate = 256000
 
 				}
+
+			} elseif ( $audiocodec -eq "flac" ) {
+
+				$channelsCommand = "-ac"
+				$bitrate = ""
+
+			}
+
+			# Audiomapping setzen
+			$audiomapping = "0:" + $($audiotrack[0].index)
+
+			# Prüfen, ob aspect ratio vorgegeben ist
+			if ( !($aspectratio -eq "" ) {
+
+				[string]$arCommand = "-aspect"
 
 			} else {
 
-					$baseName = $outfile
+				[string]$arCommand = ""
 
 			}
-			
-			$baseName = $baseName.substring(3)
 
-			if ( (Get-ChildItem "$targetFolder$baseName.*.konv.$extension" | Measure-Object).Count -gt 0) {
+			# Prüfen, ob chapters gelöscht werden sollen
+			if ( $deletechapters -eq $true ) {
 
-				for ( $i = 0; $i -lt (Get-ChildItem "$targetFolder$baseName.*.konv.$extension" | Sort-Object | Measure-Object).Count; $i++ ) {
+				[string]$chapCommand = "-map_chapters"
+				[string]$chapMapping = "-1"
 
-				$fileList = "$fileList" + ",`"$targetFolder" + (Get-ChildItem "$targetFolder$baseName.*.konv.$extension" | Sort-Object)[$i].name + "`""
+			}
 
+			# Wenn kein Parameter für Outfile übergeben wurde, im Temp-Verzeichnis eine Datei mit gleichem Namen anlegen, sonst den übergebenen Namen verwenden.
+			if ( $outfile -eq "" ) {
+
+				$outfile = ([System.IO.Path]::GetFileNameWithoutExtension($file))
+
+			} else {
+
+				$outfile = $outfile
+
+			}
+
+			# Filter vorbereiten
+			$segmente = $parts.length / 2
+			$filterCommand = "-vf"
+
+			# Copy the source file into the temporary folder if not disabled
+			if ( $nocopy -eq $false ) {
+
+				if (!(Test-Path $tempfile)) {
+					Write-Host Copying source to temporary folder
+					Copy-Item "$file" -Destination "$tempfile"
 				}
 
 			}
 
-			$fileList = "$fileList" + ",`"" + "$outfile" + "`""
+			$quellen = "-i `"" + $tempFile + "`""
 
-			[string]$finalizeCommand = "$merger" + " -parts " + "$fileList" + " -outfile `"$baseName.final`""
-			Write-Host "$finalizeCommand"
-			Invoke-Expression "& $finalizeCommand"
-			Write-Host "Finalized file $outfile moved to $targetFolder"
-			Remove-Item "$outfile"
 
-		} else {
+			# Direkt kodieren, wenn nur ein Abschnitt
+			if (( $segmente -eq 1 ) -and ( $finalize -eq $false )) {
 
-		Copy-Item "$outfile" -Destination "$targetFolder"
-		Write-Host "Converted file $outfile moved to $targetFolder"
-		Remove-Item "$outfile"
+				$extension = ".final.mkv"
+				$outfile = $tempFolder + $outfile + $extension
+
+				# Compose parameters in a string
+				$parameters = "-hide_banner -hwaccel d3d11va -ss " + (get-FormatedTime-from-Frame -frame ($parts[0] + 1) -FramesPerSec $fps) + " $quellen  -to " + (get-FormatedTime-from-Frame -frame ($parts[1] - $parts[0] - 2) -FramesPerSec $fps) + " $arCommand $aspectratio $filterCommand $filter -map 0:v:0 -c:v:0 libx265 -preset:v:0 slow -crf $crf -map $audiomapping -c:a $audiocodec $channelsCommand $channels $bitrateCommand $bitrate $chapCommand $chapMapping -f matroska -r 25 `"$outfile`""
+
+				# Show the ffmpeg command that will be applied
+				Write-Host "$ffmpeg" $parameters -ForegroundColor Yellow
+				Write-Host ""
+
+				# Launch ffmpeg
+				Invoke-Expression "$ffmpeg --% $parameters"
+
+			# Mehrere Abschnitte erst zwischenspeichern, dann zusammenführen
+			} else {
+
+				# Schleife durch alle Frame-Paare und Abschnitte ausschneiden
+				for ( $i = 1; $i -le $segmente; $i++ ) {
+
+					# Compose parameters in a string
+					if ( $hightempcompression -eq $true ) {
+
+						$parameters = "-hide_banner -hwaccel d3d11va -ss " + (get-FormatedTime-from-Frame -frame $parts[(2 * $i) - 2] -FramesPerSec $fps) + " $quellen -to " + (get-FormatedTime-from-Frame -frame ($parts[(2 * $i) - 1] - $parts[(2 * $i) - 2] - 1) -FramesPerSec $fps) + " $arCommand $aspectratio $filterCommand $filter -map 0:v:0 -c:v:0 libx265 -preset:v:0 medium -crf 0 -map $audiomapping -c:a flac $channelsCommand $channels $chapCommand $chapMapping -f matroska -r 25 `"$tempFolder$outfile`.$i`.konv.mkv`""
+
+					} else {
+
+						$parameters = "-hide_banner -hwaccel d3d11va -ss " + (get-FormatedTime-from-Frame -frame $parts[(2 * $i) - 2] -FramesPerSec $fps) + " $quellen -to " + (get-FormatedTime-from-Frame -frame ($parts[(2 * $i) - 1] - $parts[(2 * $i) - 2] - 1) -FramesPerSec $fps) + " $arCommand $aspectratio $filterCommand $filter -map 0:v:0 -c:v:0 libx264 -preset:v:0 superfast -crf 0 -map $audiomapping -c:a flac $channelsCommand $channels $chapCommand $chapMapping -f matroska -r 25 `"$tempFolder$outfile`.$i`.konv.mkv`""
+
+					}
+
+					# Show the ffmpeg command that will be applied
+					Write-Host "$ffmpeg" $parameters -ForegroundColor Yellow
+					Write-Host ""
+
+					# Launch ffmpeg
+					Invoke-Expression "$ffmpeg --% $parameters"
+
+				}
+
+				# Dateinamen vorbereiten. ".konv" ergänzen, wenn das Video nur transcodiert wird, ".final", wenn das Video auch finalisiert wird.
+				if ( $finalize ) {
+
+					$extension = ".final.mkv"
+
+				} else {
+
+					$extension = ".konv.mkv"
+
+				}
+
+				# Die Abschnitte zusammenführen und kodieren
+
+				# Quellen vorbereiten
+				# Leeren Abschnitt vorschieben, wenn finalisieren
+				if ($finalize -eq $true) {
+
+					if ($aspectratio -eq "4:3" ) {
+
+						$quellen = "-i `"$finalizePre43`""
+
+					} elseif ($channels -eq 6) {
+
+						$quellen = "-i `"$finalizePre51`""
+
+					} elseif ($channels -eq 2) {
+
+						$quellen = "-i `"$finalizePreStereo`""
+
+					} else {
+
+						# Kann nicht finalisieren, da kein Intro mit passenden Kanälen existiert
+						Write-Host "ERROR!" -ForegroundColor White -BackgroundColor DarkRed
+						Write-Host "Unknown setting for audio channels found. Neither 5.1 nor stereo!" -ForegroundColor White -BackgroundColor DarkRed
+						Write-Host
+						$fehler = 1
+
+					}
+
+					$concatAnzahl = 1
+
+				}
+
+				# Alle Abschnitte als Quelle aufnehmen
+				for ( $i = 1; $i -le $segmente; $i++ ) {
+
+					$quellen = "$quellen -i `"$tempFolder$outfile`.$i`.konv.mkv`""
+
+				}
+
+				$concatAnzahl = $concatAnzahl + $segmente
+
+				# Concat Filter vorbereiten
+				for ( $i = 0; $i -lt $concatAnzahl; $i++ ) {
+
+					$concatStreams = "$concatStreams" + "[" + "$i" + ":v:0][" + "$i" + ":a:0]"
+
+				}
+
+				###############concat filter vorbereiten
+				$concatFilter = "$concatStreams" + "concat=n=" + "$concatAnzahl" + ":v=1:a=1[videoOut][audioOut]"
+
+				# Compose parameters in a string
+				$parameters = "-hide_banner -hwaccel d3d11va $quellen -filter_complex `"$concatFilter`" -map [videoOut] -c:v:0 libx265 -preset:v:0 slow -crf $crf -map [audioOut] -c:a $audiocodec $channelsCommand $channels $bitrateCommand $bitrate $chapCommand $chapMapping -f matroska -r 25 `"$tempFolder$outfile$extension`""
+
+				# Show the ffmpeg command that will be applied
+				Write-Host "$ffmpeg" $parameters -ForegroundColor Yellow
+				Write-Host ""
+
+				# Launch ffmpeg
+				Invoke-Expression "$ffmpeg --% $parameters"
+
+
+				# Clear temp files
+				for ( $i = 1; $i -le $segmente; $i++ ) {
+
+					Remove-Item ( "$tempFolder" + "$outfile" + "`.$i`.konv.mkv")
+
+				}
+				$outfile = $tempFolder + $outfile + $extension
+
+			}
+
 
 		}
 
-		Write-Host "Temporary file successfully removed."
+		# Convert
+		if ( $fehler -eq 0 ) {
+
+			# Move converted file to final directory and remove local copy
+			if (Test-Path $outfile) {
+
+				Copy-Item "$outfile" -Destination "$targetFolder"
+				Write-Host "Converted file $outfile moved to $targetFolder" -ForegroundColor Green
+				Remove-Item "$outfile"
+				Write-Host "Temporary file successfully removed."
+				Write-Host
+
+				# Delete temp file if requested
+				if ( ($removetemp) -or ($removefile) ) { Remove-Item "$tempfile" }
+
+				# Delete source file if requested
+				if ( $removefile ) { Remove-Item "$file" }
+
+			} else {
+
+				Write-Host "ERROR!" -ForegroundColor White -BackgroundColor DarkRed
+				Write-Host "Conversion failed!" -ForegroundColor White -BackgroundColor DarkRed
+				Write-Host
+
+			}
+
+		}
 
 	} else {
 
-		Write-Host "ERROR!"
-		Write-Host "Converted file not found!"
-		Write-Host
+		Write-Host "ERROR!" -ForegroundColor White -BackgroundColor DarkRed
+		Write-Host "Start- und Endzeit fehlen." -ForegroundColor White -BackgroundColor DarkRed
+		$fehler = 1
 
 	}
 
-	# Delete source file if not disabled
-	if ( !$keepfile ) { Remove-Item "$tempfile"; Remove-Item "$file" }
+} else {
+
+	Write-Host "ERROR!" -ForegroundColor White -BackgroundColor DarkRed
+	Write-Host "Source file not found!" -ForegroundColor White -BackgroundColor DarkRed
+	Write-Host
+	$fehler = 1
 
 }
 
