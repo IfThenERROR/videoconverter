@@ -1,14 +1,10 @@
 ## Videoconverter
-## v 2.0
+## v 2.1
 ## Powershell script
-
-# Parameter übergeben
 
 param (
 
-#[Parameter(Mandatory=$true)]
-
-[String]$file,
+[Parameter(Mandatory=$true)][String]$file,
 
 [String]$extension = "mkv",
 
@@ -16,13 +12,15 @@ param (
 
 [int]$crf = 20,
 
+[switch]$lossless,
+
 [switch]$deint,
 
 [switch]$copyaudio,
 
 [switch]$hightempcompression,
 
-[string]$audiocodec = "ac3",
+[string]$audiocodec,
 
 [String]$outfile,
 
@@ -36,7 +34,9 @@ param (
 
 [switch]$finalize = $false,
 
-[string]$aspectratio
+[string]$aspectratio = "16:9",
+
+[single]$gainaudio = 1.0,
 
 [int[]]$parts
 
@@ -56,9 +56,9 @@ param (
 [string]$ffmpeg = "C:\`"portable apps\ffmpeg\bin\ffmpeg.exe`""
 
 # Path to leading black video file for finalizing
-[string]$finalizePreStereo = "C:\konv\black sekunde stereo.mkv"
-[string]$finalizePre51 = "C:\konv\black sekunde 5.1.mkv"
-[string]$finalizePre43 = "C:\konv\black sekunde stereo 43.mkv"
+[string]$finalizePreStereo = "C:\konv\black sekunde 169 stereo.lossy.mkv"
+[string]$finalizePre51 = "C:\konv\black sekunde 169 5.1.lossy.mkv"
+[string]$finalizePre43 = "C:\konv\black sekunde 43 stereo.lossy.mkv"
 
 
 ### Variables ###
@@ -72,8 +72,10 @@ param (
 [string[]]$startzeiten
 [string[]]$endzeiten
 [string]$quellen
-[string]$filterCommand = ""
-[string]$filter = ""
+[string]$videoFilterCommand = ""
+[string]$videoFilter = ""
+[string]$audioFilterCommand = ""
+[string]$audioFilter = ""
 [string]$filters = ""
 [string]$concatFilter = ""
 [string]$concatStreams = ""
@@ -86,7 +88,7 @@ param (
 
 
 ### Functions ###
-function get-FormatedTime-from-Frame([int]$frame, [int]$FramesPerSec){
+function get-FormatedTime-from-Frame([int]$frame, [int]$FramesPerSec) {
 
 	([double]$timeCalculated = $frame / $FramesPerSec) | Out-Null
 	([string]$timeFormatted = "{0:HH:mm:ss.fff}" -f ([datetime]([timespan]::fromseconds($timeCalculated)).Ticks)) | Out-Null
@@ -105,27 +107,27 @@ $ste = Add-Type -memberDefinition $code -name System -namespace Win32 -passThru
 $ste::SetThreadExecutionState([uint32]"0x80000000" -bor [uint32]"0x00000001")
 
 
-# Wenn finalize, dann auch die temporäre Datei entfernen
+# If finalize, than also remove temporary file
 if ($finalize -eq $true) {
 
 	$removetemp = $true
 
 }
 
-# Dateiname bestimmen
+# Set working directory
 if ( $nocopy -eq $false ) {
 
 	$tempFile = $tempFolder + ([System.IO.Path]::GetFileName($file))
 
 } else {
 
-	# Arbeitsverzeichnis ist Speicherort der Quelldatei
+	# Working directory is same as source file
 	$tempFile = $file
 
 }
 
-# Videofilter setzen
-$filterCommand = "-vf"
+# Set up video filters
+$videoFilterCommand = "-vf"
 if ($deint -eq $true) {
 
 	$filter = "bwdif,fps=25"
@@ -136,10 +138,23 @@ if ($deint -eq $true) {
 
 }
 
+# Set up audio filters
+if (!($gainaudio -eq 1.0)) {
+
+	$audioFilterCommand = "-filter:a"
+	$audioFilter = "volume=" + $gainaudio
+
+} else {
+
+	$audioFilterCommand = ""
+	$audioFilter = ""
+
+}
+
 # Check if the source file exists, then start converting
 if ( Test-Path $file) {
 
-	# Prüfen, ob mehrere Abschnitte übergeben wurden (neue Methode)
+	# Check if parts were defined
 	if ($parts.length -gt 0) {
 
 		if ($parts.length % 2 -ne 0) {
@@ -150,7 +165,7 @@ if ( Test-Path $file) {
 	
 		} else {
 
-			# Audiospur finden
+			# Find best audio stream
 			$rawstreams = (& "$ffprobe" '-hide_banner' '-loglevel' 'fatal' '-show_entries' 'stream="index,codec_type,codec_name,channels,bit_rate:stream_tags=language"' '-print_format' 'json' '-i' "$file" | ConvertFrom-Json)
 			$streams = @()
 
@@ -243,36 +258,39 @@ if ( Test-Path $file) {
 
 			}
 
-			# Parameter für Audiocodec setzen
-			# Default ist ac3
-			if (( $audiocodec -eq "" ) -or ( $audiocodec -eq "ac3" )) {
+			# Set up parameters for audio codec
+			# Default is ac3 for 5.1, aac for stereo
+			if ( $audiocodec -eq "" ) {
 
-				$audiocodec = "ac3"
-				$channelsCommand = "-ac"
-				$bitrateCommand = "-b:a"
+				if ( [int]($streams[$audiotrack[0].index].channels) -eq 6 ) {
 
-				#Bitrate begrenzen auf 256k für Stereo und 448k für 5.1
-				if (( $bitrate -ge 448000 ) -and ( [int]($streams[$audiotrack[0].index].channels) -eq 6)) {
+					$audiocodec = "ac3"
+					$channelsCommand = "-ac"
+					$bitrateCommand = "-b:a"
+					#Limit bitrate to 448k for 5.1
+					if ( $bitrate -ge 448000 ) { $bitrate = 448000 }
 
-					$bitrate = 448000
+				} else {
 
-				} elseif (( $bitrate -ge 256000 ) -and ( [int]($streams[$audiotrack[0].index].channels) -eq 2)) {
-
-					$bitrate = 256000
+					$audiocodec = "aac"
+					$channelsCommand = "-ac"
+					$bitrateCommand = "-b:a"
+					#Limit bitrate to 128k for stereo
+					$bitrate = 128000
 
 				}
 
-			} elseif ( $audiocodec -eq "flac" ) {
+			} elseif ( $audiocodec -eq "" ) {
 
 				$channelsCommand = "-ac"
 				$bitrate = ""
 
 			}
 
-			# Audiomapping setzen
+			# Set up audio mapping
 			$audiomapping = "0:" + $($audiotrack[0].index)
 
-			# Prüfen, ob aspect ratio vorgegeben ist
+			# Check, if aspect ratio is defined
 			if ( !($aspectratio -eq "" ) {
 
 				[string]$arCommand = "-aspect"
@@ -283,7 +301,7 @@ if ( Test-Path $file) {
 
 			}
 
-			# Prüfen, ob chapters gelöscht werden sollen
+			# Check, if chapters shall be deleted
 			if ( $deletechapters -eq $true ) {
 
 				[string]$chapCommand = "-map_chapters"
@@ -291,7 +309,7 @@ if ( Test-Path $file) {
 
 			}
 
-			# Wenn kein Parameter für Outfile übergeben wurde, im Temp-Verzeichnis eine Datei mit gleichem Namen anlegen, sonst den übergebenen Namen verwenden.
+			# If no parameter for outfile is entered, create a file with same name in temp directory, else use the set namen
 			if ( $outfile -eq "" ) {
 
 				$outfile = ([System.IO.Path]::GetFileNameWithoutExtension($file))
@@ -302,7 +320,7 @@ if ( Test-Path $file) {
 
 			}
 
-			# Filter vorbereiten
+			# Prepare filters
 			$segmente = $parts.length / 2
 			$filterCommand = "-vf"
 
@@ -319,14 +337,22 @@ if ( Test-Path $file) {
 			$quellen = "-i `"" + $tempFile + "`""
 
 
-			# Direkt kodieren, wenn nur ein Abschnitt
+			# Directly encode, if not cutting more than one part
 			if (( $segmente -eq 1 ) -and ( $finalize -eq $false )) {
 
 				$extension = ".final.mkv"
 				$outfile = $tempFolder + $outfile + $extension
 
 				# Compose parameters in a string
-				$parameters = "-hide_banner -hwaccel d3d11va -ss " + (get-FormatedTime-from-Frame -frame ($parts[0] + 1) -FramesPerSec $fps) + " $quellen  -to " + (get-FormatedTime-from-Frame -frame ($parts[1] - $parts[0] - 2) -FramesPerSec $fps) + " $arCommand $aspectratio $filterCommand $filter -map 0:v:0 -c:v:0 libx265 -preset:v:0 slow -crf $crf -map $audiomapping -c:a $audiocodec $channelsCommand $channels $bitrateCommand $bitrate $chapCommand $chapMapping -f matroska -r 25 `"$outfile`""
+				if ( $lossless -eq $true ) {
+
+					$parameters = "-hide_banner -hwaccel d3d11va -ss " + (get-FormatedTime-from-Frame -frame ($parts[0] + 1) -FramesPerSec $fps) + " $quellen  -to " + (get-FormatedTime-from-Frame -frame ($parts[1] - $parts[0] - 2) -FramesPerSec $fps) + " $arCommand $aspectratio $videoFilterCommand $videoFilter $audioFilterCommand $audioFilter -map 0:v:0 -c:v:0 libx265 -preset:v:0 slow -x265-params 'lossless=1' -map $audiomapping -c:a flac $channelsCommand $channels $chapCommand $chapMapping -f matroska -r 25 `"$outfile`""
+
+				} else {
+
+					$parameters = "-hide_banner -hwaccel d3d11va -ss " + (get-FormatedTime-from-Frame -frame ($parts[0] + 1) -FramesPerSec $fps) + " $quellen  -to " + (get-FormatedTime-from-Frame -frame ($parts[1] - $parts[0] - 2) -FramesPerSec $fps) + " $arCommand $aspectratio $videoFilterCommand $videoFilter $audioFilterCommand $audioFilter -map 0:v:0 -c:v:0 libx265 -preset:v:0 slow -crf $crf -map $audiomapping -c:a $audiocodec $channelsCommand $channels $bitrateCommand $bitrate $chapCommand $chapMapping -f matroska -r 25 `"$outfile`""
+
+				}
 
 				# Show the ffmpeg command that will be applied
 				Write-Host "$ffmpeg" $parameters -ForegroundColor Yellow
@@ -335,16 +361,19 @@ if ( Test-Path $file) {
 				# Launch ffmpeg
 				Invoke-Expression "$ffmpeg --% $parameters"
 
-			# Mehrere Abschnitte erst zwischenspeichern, dann zusammenführen
+				# Delete temp file if requested
+				if ( ($removetemp) -or ($removefile) ) { Remove-Item "$tempfile" }
+
+			# For more than one part, cache parts first, than merge
 			} else {
 
-				# Schleife durch alle Frame-Paare und Abschnitte ausschneiden
+				# Loop through all frame pairs and cut segments
 				for ( $i = 1; $i -le $segmente; $i++ ) {
 
 					# Compose parameters in a string
 					if ( $hightempcompression -eq $true ) {
 
-						$parameters = "-hide_banner -hwaccel d3d11va -ss " + (get-FormatedTime-from-Frame -frame $parts[(2 * $i) - 2] -FramesPerSec $fps) + " $quellen -to " + (get-FormatedTime-from-Frame -frame ($parts[(2 * $i) - 1] - $parts[(2 * $i) - 2] - 1) -FramesPerSec $fps) + " $arCommand $aspectratio $filterCommand $filter -map 0:v:0 -c:v:0 libx265 -preset:v:0 medium -crf 0 -map $audiomapping -c:a flac $channelsCommand $channels $chapCommand $chapMapping -f matroska -r 25 `"$tempFolder$outfile`.$i`.konv.mkv`""
+						$parameters = "-hide_banner -hwaccel d3d11va -ss " + (get-FormatedTime-from-Frame -frame $parts[(2 * $i) - 2] -FramesPerSec $fps) + " $quellen -to " + (get-FormatedTime-from-Frame -frame ($parts[(2 * $i) - 1] - $parts[(2 * $i) - 2] - 1) -FramesPerSec $fps) + " $arCommand $aspectratio $videoFilterCommand $videoFilter $audioFilterCommand $audioFilter -map 0:v:0 -c:v:0 libx265 -preset:v:0 medium -x265-params 'lossless=1' -map $audiomapping -c:a flac $channelsCommand $channels $chapCommand $chapMapping -f matroska -r 25 `"$tempFolder$outfile`.$i`.konv.mkv`""
 
 					} else {
 
@@ -361,7 +390,7 @@ if ( Test-Path $file) {
 
 				}
 
-				# Dateinamen vorbereiten. ".konv" ergänzen, wenn das Video nur transcodiert wird, ".final", wenn das Video auch finalisiert wird.
+				# Prepare file name. Append ".konv", if the video is just transcoded, append ".final", if the video is finalized
 				if ( $finalize ) {
 
 					$extension = ".final.mkv"
@@ -372,10 +401,13 @@ if ( Test-Path $file) {
 
 				}
 
-				# Die Abschnitte zusammenführen und kodieren
+				# Merge all segments and encode
 
-				# Quellen vorbereiten
-				# Leeren Abschnitt vorschieben, wenn finalisieren
+				# Remove temporary source to free space
+				if ( ($removetemp) -or ($removefile) ) { Remove-Item "$tempfile" }
+
+				# Set up sources
+				# prepand blank segment if finalizing
 				if ($finalize -eq $true) {
 
 					if ($aspectratio -eq "4:3" ) {
@@ -404,7 +436,7 @@ if ( Test-Path $file) {
 
 				}
 
-				# Alle Abschnitte als Quelle aufnehmen
+				# Add all segments as source
 				for ( $i = 1; $i -le $segmente; $i++ ) {
 
 					$quellen = "$quellen -i `"$tempFolder$outfile`.$i`.konv.mkv`""
@@ -413,7 +445,7 @@ if ( Test-Path $file) {
 
 				$concatAnzahl = $concatAnzahl + $segmente
 
-				# Concat Filter vorbereiten
+				# Set up concat filter
 				for ( $i = 0; $i -lt $concatAnzahl; $i++ ) {
 
 					$concatStreams = "$concatStreams" + "[" + "$i" + ":v:0][" + "$i" + ":a:0]"
@@ -458,9 +490,6 @@ if ( Test-Path $file) {
 				Remove-Item "$outfile"
 				Write-Host "Temporary file successfully removed."
 				Write-Host
-
-				# Delete temp file if requested
-				if ( ($removetemp) -or ($removefile) ) { Remove-Item "$tempfile" }
 
 				# Delete source file if requested
 				if ( $removefile ) { Remove-Item "$file" }
